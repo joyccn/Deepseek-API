@@ -97,13 +97,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	prompt := promptBuilder.String()
 
-	// Process image attachments if base64 data URLs are included
-	rawMessagesBytes, _ := json.Marshal(req.Messages)
-	refFileIDs, _, err := agentic.ProcessImagePayload(ctx, s.client, string(rawMessagesBytes))
-	if err != nil {
-		slog.Error("Failed to process image payload", "error", err)
-	}
-
 	// Inject tool instructions if tools array is provided
 	if len(req.Tools) > 0 {
 		prompt = agentic.InjectToolsIntoPrompt(prompt, req.Tools)
@@ -151,7 +144,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		ModelType:       modelType,
 		ThinkingEnabled: req.Thinking,
 		SearchEnabled:   req.Search,
-		RefFileIDs:      refFileIDs,
 	}
 
 	if req.Stream {

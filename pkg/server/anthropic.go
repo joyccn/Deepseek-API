@@ -110,13 +110,6 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 	prompt := promptBuilder.String()
 
-	refFileIDs, cleanPrompt, err := agentic.ProcessImagePayload(ctx, s.client, prompt)
-	if err != nil {
-		slog.Error("Failed to process image payload for Anthropic request", "error", err)
-	} else {
-		prompt = cleanPrompt
-	}
-
 	// Inject tool instructions if tools are present
 	if len(req.Tools) > 0 {
 		prompt = agentic.InjectToolsIntoPrompt(prompt, req.Tools)
@@ -146,7 +139,6 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		ModelType:       "default",
 		ThinkingEnabled: thinkingEnabled,
 		SearchEnabled:   false,
-		RefFileIDs:      refFileIDs,
 	}
 
 	if req.Stream {
