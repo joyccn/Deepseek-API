@@ -2,6 +2,7 @@
 .env
 .superpowers/
 docs/
+scratch/
 
 # Binaries & Executables
 deepseek-api-server
