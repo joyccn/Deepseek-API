@@ -105,12 +105,23 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve session ID
 	sessionID := req.ConversationID
-	if sessionID == "" {
+	isReset := sessionID == "new" || strings.HasPrefix(strings.TrimSpace(prompt), "/clear") || strings.HasPrefix(strings.TrimSpace(prompt), "/reset") || strings.HasPrefix(strings.TrimSpace(prompt), "/new")
+
+	if sessionID != "" && !isReset {
+		if mappedID, ok := s.cache.Get(sessionID); ok {
+			sessionID = mappedID
+		}
+	}
+
+	if sessionID == "" || isReset {
 		newID, err := s.client.CreateChatSession(ctx)
 		if err != nil {
 			slog.Error("Failed to create chat session", "error", err)
 			http.Error(w, fmt.Sprintf(`{"error":{"message":"Failed to initialize DeepSeek session: %v"}}`, err), http.StatusInternalServerError)
 			return
+		}
+		if req.ConversationID != "" && req.ConversationID != "new" {
+			s.cache.Set(req.ConversationID, newID)
 		}
 		sessionID = newID
 	}
