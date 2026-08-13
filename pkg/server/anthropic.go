@@ -142,14 +142,14 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.Stream {
-		s.handleAnthropicStreamResponse(w, r, compReq, powHeader, req.Model, sessionID)
+		s.handleAnthropicStreamResponse(w, r, compReq, powHeader, req.Model)
 		return
 	}
 
-	s.handleAnthropicNonStreamResponse(w, compReq, powHeader, req.Model, sessionID)
+	s.handleAnthropicNonStreamResponse(w, compReq, powHeader, req.Model)
 }
 
-func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Request, compReq client.CompletionRequest, powHeader, model, sessionID string) {
+func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Request, compReq client.CompletionRequest, powHeader, model string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -193,7 +193,8 @@ func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Re
 	var fullTextBuilder strings.Builder
 
 	for ev := range events {
-		if ev.Type == client.EventThinking {
+		switch ev.Type {
+		case client.EventThinking:
 			if !hasStartedThinkingBlock {
 				hasStartedThinkingBlock = true
 				startData, _ := json.Marshal(map[string]any{
@@ -211,7 +212,7 @@ func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Re
 			})
 			fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", deltaData)
 			flusher.Flush()
-		} else if ev.Type == client.EventContent {
+		case client.EventContent:
 			if hasStartedThinkingBlock {
 				// Close thinking block
 				stopData, _ := json.Marshal(map[string]any{
@@ -281,7 +282,7 @@ func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Re
 	flusher.Flush()
 }
 
-func (s *Server) handleAnthropicNonStreamResponse(w http.ResponseWriter, compReq client.CompletionRequest, powHeader, model, sessionID string) {
+func (s *Server) handleAnthropicNonStreamResponse(w http.ResponseWriter, compReq client.CompletionRequest, powHeader, model string) {
 	events, err := s.client.Stream(context.Background(), compReq, powHeader)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"type":"api_error","message":"Request error: %v"}}`, err), http.StatusInternalServerError)
@@ -290,9 +291,10 @@ func (s *Server) handleAnthropicNonStreamResponse(w http.ResponseWriter, compReq
 
 	var thinkBuilder, contentBuilder strings.Builder
 	for ev := range events {
-		if ev.Type == client.EventThinking {
+		switch ev.Type {
+		case client.EventThinking:
 			thinkBuilder.WriteString(ev.Text)
-		} else if ev.Type == client.EventContent {
+		case client.EventContent:
 			contentBuilder.WriteString(ev.Text)
 		}
 	}

@@ -173,7 +173,8 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 		chunk.Model = model
 		chunk.ConversationID = sessionID
 
-		if ev.Type == client.EventThinking {
+		switch ev.Type {
+		case client.EventThinking:
 			chunk.Choices = []ChatChunkChoice{
 				{
 					Index: 0,
@@ -182,7 +183,7 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 					},
 				},
 			}
-		} else if ev.Type == client.EventContent {
+		case client.EventContent:
 			fullTextBuilder.WriteString(ev.Text)
 			chunk.Choices = []ChatChunkChoice{
 				{
@@ -237,9 +238,10 @@ func (s *Server) handleNonStreamResponse(w http.ResponseWriter, compReq client.C
 
 	var thinkBuilder, contentBuilder strings.Builder
 	for ev := range events {
-		if ev.Type == client.EventThinking {
+		switch ev.Type {
+		case client.EventThinking:
 			thinkBuilder.WriteString(ev.Text)
-		} else if ev.Type == client.EventContent {
+		case client.EventContent:
 			contentBuilder.WriteString(ev.Text)
 		}
 	}
