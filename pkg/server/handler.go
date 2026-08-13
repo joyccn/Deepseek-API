@@ -30,7 +30,6 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/models", s.handleListModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("POST /v1/messages", s.handleAnthropicMessages)
-	mux.HandleFunc("POST /v1/images/generations", s.handleImageGenerations)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -93,10 +92,25 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			promptBuilder.WriteString(m.Role)
 			promptBuilder.WriteString(": ")
 		}
-		promptBuilder.WriteString(m.Content)
+		switch c := m.Content.(type) {
+		case string:
+			promptBuilder.WriteString(c)
+		default:
+			// Marshal complex content array to json string so image extractor can parse data URLs
+			cBytes, _ := json.Marshal(c)
+			promptBuilder.Write(cBytes)
+		}
 		promptBuilder.WriteString("\n")
 	}
 	prompt := promptBuilder.String()
+
+	// Process image attachments if base64 data URLs are included
+	refFileIDs, cleanPrompt, err := agentic.ProcessImagePayload(ctx, s.client, prompt)
+	if err != nil {
+		slog.Error("Failed to process image payload", "error", err)
+	} else {
+		prompt = cleanPrompt
+	}
 
 	// Inject tool instructions if tools array is provided
 	if len(req.Tools) > 0 {
@@ -145,6 +159,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		ModelType:       modelType,
 		ThinkingEnabled: req.Thinking,
 		SearchEnabled:   req.Search,
+		RefFileIDs:      refFileIDs,
 	}
 
 	if req.Stream {

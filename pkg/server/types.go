@@ -4,7 +4,7 @@ import "deepseek-api/pkg/agentic"
 
 type ChatMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
 }
 
 type ChatCompletionRequest struct {
