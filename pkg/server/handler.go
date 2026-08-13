@@ -40,11 +40,32 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	now := time.Now().Unix()
 	resp := map[string]any{
 		"object": "list",
 		"data": []map[string]any{
-			{"id": "deepseek-chat", "object": "model", "created": time.Now().Unix(), "owned_by": "deepseek"},
-			{"id": "deepseek-expert", "object": "model", "created": time.Now().Unix(), "owned_by": "deepseek"},
+			{"id": "deepseek-chat", "object": "model", "created": now, "owned_by": "deepseek"},
+			{"id": "deepseek-expert", "object": "model", "created": now, "owned_by": "deepseek"},
+		},
+		"models": []map[string]any{
+			{
+				"slug":                       "deepseek-chat",
+				"display_name":               "DeepSeek Instant (Chat)",
+				"description":                "Fast and responsive model for general coding and tasks",
+				"default_reasoning_level":    "medium",
+				"supported_reasoning_levels": []map[string]string{{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}},
+				"supported_in_api":           true,
+				"context_window":             128000,
+			},
+			{
+				"slug":                       "deepseek-expert",
+				"display_name":               "DeepSeek Expert (R1)",
+				"description":                "High-precision model for complex reasoning and architecture",
+				"default_reasoning_level":    "high",
+				"supported_reasoning_levels": []map[string]string{{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}},
+				"supported_in_api":           true,
+				"context_window":             128000,
+			},
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
