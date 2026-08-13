@@ -25,7 +25,7 @@ func main() {
 	sess, err := auth.LoadSession(sessionPath)
 	if err != nil {
 		slog.Error("Failed to load session file", "path", sessionPath, "error", err)
-		slog.Info("Please run python -m deepseek.auth first or ensure session/session.json exists")
+		slog.Info("Please ensure session/session.json exists with valid token and cookies")
 		os.Exit(1)
 	}
 

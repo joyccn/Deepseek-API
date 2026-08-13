@@ -130,7 +130,7 @@ func (s *Solver) solve(ctx context.Context, challenge, prefix string, difficulty
 	}
 
 	mem, ok := s.module.Memory().Read(retPtr, 16)
-	if !ok {
+	if !ok || len(mem) < 16 {
 		return 0, fmt.Errorf("failed to read WASM return pointer memory")
 	}
 

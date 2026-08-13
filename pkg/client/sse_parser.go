@@ -7,12 +7,15 @@ import (
 	"strings"
 )
 
+const maxSSELineSize = 10 * 1024 * 1024 // 10MB max line buffer size for large SSE payloads
+
 func ParseSSE(r io.Reader) <-chan StreamEvent {
 	ch := make(chan StreamEvent, 200)
 
 	go func() {
 		defer close(ch)
 		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 64*1024), maxSSELineSize)
 		activeFragmentType := EventContent
 
 		for scanner.Scan() {
