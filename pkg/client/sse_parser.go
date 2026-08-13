@@ -43,7 +43,8 @@ func ParseSSE(r io.Reader) <-chan StreamEvent {
 							if fMap, ok := f.(map[string]any); ok {
 								fType, _ := fMap["type"].(string)
 								content, _ := fMap["content"].(string)
-								if fType == "THINK" {
+								fTypeUpper := strings.ToUpper(fType)
+								if strings.Contains(fTypeUpper, "THINK") || strings.Contains(fTypeUpper, "REASON") {
 									activeFragmentType = EventThinking
 								} else {
 									activeFragmentType = EventContent
@@ -64,7 +65,8 @@ func ParseSSE(r io.Reader) <-chan StreamEvent {
 					if fMap, ok := vList[0].(map[string]any); ok {
 						fType, _ := fMap["type"].(string)
 						content, _ := fMap["content"].(string)
-						if fType == "THINK" {
+						fTypeUpper := strings.ToUpper(fType)
+						if strings.Contains(fTypeUpper, "THINK") || strings.Contains(fTypeUpper, "REASON") {
 							activeFragmentType = EventThinking
 						} else {
 							activeFragmentType = EventContent
@@ -77,11 +79,17 @@ func ParseSSE(r io.Reader) <-chan StreamEvent {
 				continue
 			}
 
-			// Text content append: {"p": "response/fragments/-1/content", "v": "..."} or {"v": "..."}
-			if strVal, ok := v.(string); ok {
+			// Text content append: {"p": "response/fragments/0/content", "v": "..."}
+			if strVal, ok := v.(string); ok && strVal != "" {
 				pStr, _ := obj["p"].(string)
-				if pStr == "" || strings.HasSuffix(pStr, "content") {
-					ch <- StreamEvent{Type: activeFragmentType, Text: strVal}
+				fragType := activeFragmentType
+				if strings.Contains(pStr, "fragments/0") {
+					fragType = EventThinking
+				} else if strings.Contains(pStr, "fragments/1") {
+					fragType = EventContent
+				}
+				if pStr == "" || strings.Contains(pStr, "content") || strings.Contains(pStr, "fragments") {
+					ch <- StreamEvent{Type: fragType, Text: strVal}
 				}
 			}
 		}

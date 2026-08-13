@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"time"
@@ -70,6 +71,8 @@ func (c *Client) CreateChatSession(ctx context.Context) (string, error) {
 }
 
 func (c *Client) UploadFile(ctx context.Context, fileName string, fileBytes []byte) (string, error) {
+	powHeader, _ := c.FetchPoWHeaderForPath(ctx, "/api/v0/file/upload")
+
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	part, err := writer.CreateFormFile("file", fileName)
@@ -88,12 +91,20 @@ func (c *Client) UploadFile(ctx context.Context, fileName string, fileBytes []by
 	}
 	c.setHeaders(req)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if powHeader != "" {
+		req.Header.Set("x-ds-pow-response", powHeader)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
+
+	bodyRespBytes, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("deepseek file upload returned HTTP %d: %s", resp.StatusCode, string(bodyRespBytes))
+	}
 
 	var result struct {
 		Code int    `json:"code"`
@@ -104,8 +115,8 @@ func (c *Client) UploadFile(ctx context.Context, fileName string, fileBytes []by
 			} `json:"biz_data"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("unable to decode file upload response: %w", err)
+	if err := json.Unmarshal(bodyRespBytes, &result); err != nil {
+		return "", fmt.Errorf("unable to decode file upload response (body=%s): %w", string(bodyRespBytes), err)
 	}
 	if result.Code != 0 {
 		return "", fmt.Errorf("deepseek file upload error: %s (code %d)", result.Msg, result.Code)
@@ -114,7 +125,11 @@ func (c *Client) UploadFile(ctx context.Context, fileName string, fileBytes []by
 }
 
 func (c *Client) FetchPoWHeader(ctx context.Context) (string, error) {
-	reqBody, _ := json.Marshal(map[string]string{"target_path": CompletionPath})
+	return c.FetchPoWHeaderForPath(ctx, CompletionPath)
+}
+
+func (c *Client) FetchPoWHeaderForPath(ctx context.Context, targetPath string) (string, error) {
+	reqBody, _ := json.Marshal(map[string]string{"target_path": targetPath})
 	req, err := http.NewRequestWithContext(ctx, "POST", BaseURL+"/api/v0/chat/create_pow_challenge", bytes.NewBuffer(reqBody))
 	if err != nil {
 		return "", err
@@ -147,18 +162,26 @@ func (c *Client) Stream(ctx context.Context, compReq CompletionRequest, powHeade
 		refFileIDs = compReq.RefFileIDs
 	}
 
+	modelType := compReq.ModelType
+	thinkingEnabled := compReq.ThinkingEnabled
+
+	if len(refFileIDs) > 0 {
+		modelType = "vision"
+		thinkingEnabled = false
+	} else if modelType == "" || modelType == "default" {
+		modelType = "DEFAULT"
+	}
+
 	bodyMap := map[string]any{
 		"chat_session_id":   compReq.ChatSessionID,
 		"parent_message_id": compReq.ParentMessageID,
 		"prompt":            compReq.Prompt,
 		"ref_file_ids":      refFileIDs,
-		"thinking_enabled":  compReq.ThinkingEnabled,
+		"thinking_enabled":  thinkingEnabled,
 		"search_enabled":    compReq.SearchEnabled,
 		"action":            nil,
 		"preempt":           false,
-	}
-	if compReq.ModelType != "" {
-		bodyMap["model_type"] = compReq.ModelType
+		"model_type":        modelType,
 	}
 
 	bodyBytes, err := json.Marshal(bodyMap)
@@ -179,8 +202,9 @@ func (c *Client) Stream(ctx context.Context, compReq CompletionRequest, powHeade
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP completion returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP completion returned status %d: %s", resp.StatusCode, string(errBody))
 	}
 
 	ch := make(chan StreamEvent, 200)

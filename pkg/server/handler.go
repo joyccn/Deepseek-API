@@ -92,24 +92,16 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			promptBuilder.WriteString(m.Role)
 			promptBuilder.WriteString(": ")
 		}
-		switch c := m.Content.(type) {
-		case string:
-			promptBuilder.WriteString(c)
-		default:
-			// Marshal complex content array to json string so image extractor can parse data URLs
-			cBytes, _ := json.Marshal(c)
-			promptBuilder.Write(cBytes)
-		}
+		promptBuilder.WriteString(extractMessageContent(m.Content))
 		promptBuilder.WriteString("\n")
 	}
 	prompt := promptBuilder.String()
 
 	// Process image attachments if base64 data URLs are included
-	refFileIDs, cleanPrompt, err := agentic.ProcessImagePayload(ctx, s.client, prompt)
+	rawMessagesBytes, _ := json.Marshal(req.Messages)
+	refFileIDs, _, err := agentic.ProcessImagePayload(ctx, s.client, string(rawMessagesBytes))
 	if err != nil {
 		slog.Error("Failed to process image payload", "error", err)
-	} else {
-		prompt = cleanPrompt
 	}
 
 	// Inject tool instructions if tools array is provided
@@ -263,7 +255,9 @@ func (s *Server) handleNonStreamResponse(w http.ResponseWriter, compReq client.C
 	}
 
 	var thinkBuilder, contentBuilder strings.Builder
+	eventCount := 0
 	for ev := range events {
+		eventCount++
 		switch ev.Type {
 		case client.EventThinking:
 			thinkBuilder.WriteString(ev.Text)
@@ -271,6 +265,8 @@ func (s *Server) handleNonStreamResponse(w http.ResponseWriter, compReq client.C
 			contentBuilder.WriteString(ev.Text)
 		}
 	}
+
+	slog.Info("handleNonStreamResponse finished collecting events", "count", eventCount, "thinkLen", thinkBuilder.Len(), "contentLen", contentBuilder.Len())
 
 	rawContent := contentBuilder.String()
 	extractedThinking, cleanContent := agentic.ExtractThinkingContent(rawContent)
@@ -281,6 +277,11 @@ func (s *Server) handleNonStreamResponse(w http.ResponseWriter, compReq client.C
 	}
 
 	toolCalls, finalContent := agentic.ParseToolCalls(cleanContent)
+	if finalContent == "" && finalThinking != "" {
+		finalContent = finalThinking
+		finalThinking = ""
+	}
+
 	finishReason := "stop"
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
@@ -309,4 +310,27 @@ func (s *Server) handleNonStreamResponse(w http.ResponseWriter, compReq client.C
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func extractMessageContent(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []any:
+		var sb strings.Builder
+		for _, item := range v {
+			if itemMap, ok := item.(map[string]any); ok {
+				if t, ok := itemMap["type"].(string); ok && t == "text" {
+					if textVal, ok := itemMap["text"].(string); ok {
+						sb.WriteString(textVal)
+						sb.WriteString("\n")
+					}
+				}
+			}
+		}
+		return sb.String()
+	default:
+		cBytes, _ := json.Marshal(content)
+		return string(cBytes)
+	}
 }
