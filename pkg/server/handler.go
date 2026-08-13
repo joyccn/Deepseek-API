@@ -63,17 +63,19 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Extract prompt from messages
+	// Build prompt from messages
 	var promptBuilder strings.Builder
 	for _, m := range req.Messages {
-		promptBuilder.WriteString(m.Role)
-		promptBuilder.WriteString(": ")
+		if m.Role != "" {
+			promptBuilder.WriteString(m.Role)
+			promptBuilder.WriteString(": ")
+		}
 		promptBuilder.WriteString(m.Content)
 		promptBuilder.WriteString("\n")
 	}
 	prompt := promptBuilder.String()
 
-	// Inject tool instructions if tools parameter is present
+	// Inject tool instructions if tools array is provided
 	if len(req.Tools) > 0 {
 		prompt = agentic.InjectToolsIntoPrompt(prompt, req.Tools)
 	}
@@ -138,6 +140,7 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 
 	created := time.Now().Unix()
 	reqID := fmt.Sprintf("chatcmpl-%d", created)
+	var fullTextBuilder strings.Builder
 
 	for ev := range events {
 		var chunk ChatCompletionChunk
@@ -157,6 +160,7 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 				},
 			}
 		} else if ev.Type == client.EventContent {
+			fullTextBuilder.WriteString(ev.Text)
 			chunk.Choices = []ChatChunkChoice{
 				{
 					Index: 0,
@@ -172,7 +176,14 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 		flusher.Flush()
 	}
 
+	fullText := fullTextBuilder.String()
+	toolCalls, _ := agentic.ParseToolCalls(fullText)
+
 	finishReason := "stop"
+	if len(toolCalls) > 0 {
+		finishReason = "tool_calls"
+	}
+
 	doneChunk := ChatCompletionChunk{
 		ID:             reqID,
 		Object:         "chat.completion.chunk",
@@ -181,8 +192,10 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 		ConversationID: sessionID,
 		Choices: []ChatChunkChoice{
 			{
-				Index:        0,
-				Delta:        ChatChoiceDelta{},
+				Index: 0,
+				Delta: ChatChoiceDelta{
+					ToolCalls: toolCalls,
+				},
 				FinishReason: &finishReason,
 			},
 		},
@@ -208,6 +221,20 @@ func (s *Server) handleNonStreamResponse(w http.ResponseWriter, compReq client.C
 		}
 	}
 
+	rawContent := contentBuilder.String()
+	extractedThinking, cleanContent := agentic.ExtractThinkingContent(rawContent)
+
+	finalThinking := thinkBuilder.String()
+	if finalThinking == "" && extractedThinking != "" {
+		finalThinking = extractedThinking
+	}
+
+	toolCalls, finalContent := agentic.ParseToolCalls(cleanContent)
+	finishReason := "stop"
+	if len(toolCalls) > 0 {
+		finishReason = "tool_calls"
+	}
+
 	created := time.Now().Unix()
 	resp := ChatCompletionResponse{
 		ID:             fmt.Sprintf("chatcmpl-%d", created),
@@ -220,10 +247,11 @@ func (s *Server) handleNonStreamResponse(w http.ResponseWriter, compReq client.C
 				Index: 0,
 				Message: ChatResponseMessage{
 					Role:             "assistant",
-					Content:          contentBuilder.String(),
-					ReasoningContent: thinkBuilder.String(),
+					Content:          finalContent,
+					ReasoningContent: finalThinking,
+					ToolCalls:        toolCalls,
 				},
-				FinishReason: "stop",
+				FinishReason: finishReason,
 			},
 		},
 	}

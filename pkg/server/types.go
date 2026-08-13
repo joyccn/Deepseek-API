@@ -1,5 +1,7 @@
 package server
 
+import "deepseek-api/pkg/agentic"
+
 type ChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -16,9 +18,10 @@ type ChatCompletionRequest struct {
 }
 
 type ChatChoiceDelta struct {
-	Role             string `json:"role,omitempty"`
-	Content          string `json:"content,omitempty"`
-	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Role             string             `json:"role,omitempty"`
+	Content          string             `json:"content,omitempty"`
+	ReasoningContent string             `json:"reasoning_content,omitempty"`
+	ToolCalls        []agentic.ToolCall `json:"tool_calls,omitempty"`
 }
 
 type ChatChunkChoice struct {
@@ -37,9 +40,10 @@ type ChatCompletionChunk struct {
 }
 
 type ChatResponseMessage struct {
-	Role             string `json:"role"`
-	Content          string `json:"content"`
-	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Role             string             `json:"role"`
+	Content          string             `json:"content"`
+	ReasoningContent string             `json:"reasoning_content,omitempty"`
+	ToolCalls        []agentic.ToolCall `json:"tool_calls,omitempty"`
 }
 
 type ChatResponseChoice struct {
