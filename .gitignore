@@ -1,0 +1,23 @@
+# Environment & Build artifacts
+.env
+.superpowers/
+docs/
+
+# Binaries & Executables
+deepseek-api-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Session artifacts — contain private session tokens & cookies. NEVER commit.
+session.json
+session/
+*.env.*
+!.env.example
+
+# Temporary test / legacy artifacts
+venv/
+__pycache__/
+*.pyc
