@@ -50,7 +50,7 @@ func main() {
 	b64Image := base64.StdEncoding.EncodeToString(imgBytes)
 	dataURL := fmt.Sprintf("data:image/png;base64,%s", b64Image)
 
-	url := "http://localhost:8085/v1/chat/completions"
+	url := "http://localhost:8080/v1/chat/completions"
 
 	promptText := "Tolong jelaskan gambar yang saya lampirkan ini: sebutkan nama karakter/hewan ini, warnanya, dan detailnya."
 

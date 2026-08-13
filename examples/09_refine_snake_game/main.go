@@ -31,7 +31,7 @@ type ChatCompletionResponse struct {
 }
 
 func main() {
-	url := "http://localhost:8000/v1/chat/completions"
+	url := "http://localhost:8080/v1/chat/completions"
 
 	prompt := `Fix and refine the Python Snake Game class and unit tests so that 100% of unittest cases pass without error.
 Make sure:

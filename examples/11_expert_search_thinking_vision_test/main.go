@@ -85,7 +85,7 @@ func main() {
 	b64Image := base64.StdEncoding.EncodeToString(imgBytes)
 	dataURL := fmt.Sprintf("data:image/png;base64,%s", b64Image)
 
-	url := "http://localhost:8120/v1/chat/completions"
+	url := "http://localhost:8080/v1/chat/completions"
 
 	fmt.Println("=== TURN 1: VISION + EXPERT (R1) + SEARCH + DEEPTHINK ===")
 	prompt1 := "Tolong jelaskan secara detail gambar ini menggunakan analisis mendalam R1 dan pencarian web."

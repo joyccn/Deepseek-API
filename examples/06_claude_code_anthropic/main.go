@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	url := "http://localhost:8000/v1/messages"
+	url := "http://localhost:8080/v1/messages"
 
 	reqBody := map[string]any{
 		"model":      "claude-3-5-sonnet-20241022",
