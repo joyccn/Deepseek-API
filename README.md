@@ -1,29 +1,33 @@
 # Deepseek-API
 
-High-performance, 100% native **Golang** OpenAI-compatible API relay server (`http://localhost:8000/v1`) powered by personal DeepSeek Web accounts.
+High-performance, 100% native **Golang** OpenAI & Anthropic compatible API relay server (`http://localhost:8000`) powered by personal DeepSeek Web accounts.
 
-Designed specifically to serve as a fast, reliable backend provider for **Agentic Coding CLIs** (e.g., Claude Code, Cursor, Gemini CLI, Qwen Code, etc.) with support for **DeepThink R1 Reasoning**, **Web Search**, and **Tool Calling**.
+Designed specifically to serve as a fast, reliable backend provider for **Agentic Coding CLIs** (e.g., Claude Code, OpenCode, Cursor, Gemini CLI, Qwen Code, etc.) with support for **Anthropic Messages API**, **OpenAI Chat Completions**, **DeepThink R1 Reasoning**, **Web Search**, **Image Generation**, and **Tool Calling**.
 
 ---
 
 ## Features
 
 - **Pure Go WASM PoW Solver (`wazero`)** — Zero CGo dependencies. Solves DeepSeek `sha3_wasm_bg.wasm` challenges natively in ~0.16s.
-- **Clean Reasoning Output Parser** — Separates `THINK` and `RESPONSE` stream fragments. `reasoning_content` is delivered in standard OpenAI delta format without corrupting main answer text.
-- **Agentic Tool Calling Bridge** — Converts OpenAI `tools` definitions into prompt instructions and parses XML/JSON `<tool_call>` outputs back into standard OpenAI `tool_calls`.
-- **OpenAI Drop-in Compatibility** — Full support for `GET /v1/models`, `POST /v1/chat/completions` (JSON & SSE streaming `stream: true`).
-- **Stateful Multi-turn Context** — Thread-safe session cache maps OpenAI client message arrays to DeepSeek `chat_session_id` continuously.
+- **Dual API Compatibility (Anthropic + OpenAI)** — Dual endpoint support for both Anthropic Messages API (`POST /v1/messages`) and OpenAI Chat (`POST /v1/chat/completions`).
+- **Claude Code Integration** — Native support for Claude Code CLI and Anthropic SDKs via `/v1/messages` with `thinking` blocks (`budget_tokens`) and `tool_use`.
+- **Image Generation Endpoint** — Standard OpenAI Image API bridge (`POST /v1/images/generations`).
+- **Clean Reasoning Output Parser** — Separates `THINK` and `RESPONSE` stream fragments cleanly. `reasoning_content` & `thinking` are delivered in standard delta formats without corrupting main answer text.
+- **Agentic Tool Calling Bridge** — Converts OpenAI `tools` and Anthropic `tools` definitions into prompt instructions and parses XML/JSON `<tool_call>` outputs back into standard `tool_calls` / `tool_use`.
+- **Stateful Multi-turn Context** — Thread-safe session cache maps client message arrays to DeepSeek `chat_session_id` continuously.
 
 ---
 
 ## Compatibility
 
-Deepseek-API is a full drop-in replacement for OpenAI endpoints. All models and toggles match the official web interface:
+Deepseek-API is a full drop-in replacement for OpenAI and Anthropic endpoints:
 
-| Model Name | DeepSeek Mode | Features Supported |
+| Endpoint | Standard API | Supported Features |
 | :--- | :--- | :--- |
-| `deepseek-chat` | Instant (Fast) | Text Completion, DeepThink R1, Web Search, Tool Calling |
-| `deepseek-expert` | Expert (Strong) | Complex Reasoning, DeepThink R1, Web Search, Tool Calling |
+| `POST /v1/messages` | **Anthropic Messages API** | Claude Code CLI, Anthropic SDKs, `thinking` blocks, `tool_use` |
+| `POST /v1/chat/completions` | **OpenAI Chat API** | OpenCode, Cursor, Aider, `reasoning_content`, `tool_calls`, SSE Streaming |
+| `POST /v1/images/generations` | **OpenAI Image API** | Image Generation & Vision Bridges |
+| `GET /v1/models` | **OpenAI Models API** | Model Discovery (`deepseek-chat`, `deepseek-expert`) |
 
 ---
 
@@ -33,8 +37,8 @@ Deepseek-API is a full drop-in replacement for OpenAI endpoints. All models and 
 - **`pkg/pow`** — WebAssembly PoW solver executing `sha3_wasm_bg.wasm` via `wazero`.
 - **`pkg/auth`** — Session storage and bearer token validator (`session/session.json`).
 - **`pkg/client`** — Direct HTTP client driver & real-time SSE stream fragment parser.
-- **`pkg/agentic`** — Thread-safe session cache, prompt injector, and tool call parser.
-- **`pkg/server`** — OpenAI-compatible REST API handlers (`/v1/chat/completions`, `/v1/models`, `/healthz`).
+- **`pkg/agentic`** — Thread-safe session cache, prompt injector, thinking extractor, and tool call parser.
+- **`pkg/server`** — OpenAI & Anthropic REST API handlers (`/v1/messages`, `/v1/chat/completions`, `/v1/images/generations`, `/v1/models`, `/healthz`).
 
 ---
 
@@ -101,11 +105,26 @@ go run ./examples/04_web_search
 
 # Tool Calling parser
 go run ./examples/05_tool_calling
+
+# Claude Code / Anthropic Messages API
+go run ./examples/06_claude_code_anthropic
 ```
 
 ### HTTP Curl Examples
 
-#### Standard Chat Completion
+#### Anthropic Messages API (Claude Code CLI / Anthropic SDK)
+```bash
+curl http://localhost:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-3-5-sonnet-20241022",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello Claude Code!"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+#### Standard OpenAI Chat Completion
 ```bash
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -115,25 +134,12 @@ curl http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-#### DeepThink R1 Reasoning Mode
+#### Image Generation API
 ```bash
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:8000/v1/images/generations \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "deepseek-chat",
-    "thinking": true,
-    "messages": [{"role": "user", "content": "Which is bigger: 9.11 or 9.9?"}]
-  }'
-```
-
-#### Streaming SSE Mode
-```bash
-curl http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-expert",
-    "stream": true,
-    "messages": [{"role": "user", "content": "Count from 1 to 5."}]
+    "prompt": "A futuristic robot working in a server room"
   }'
 ```
 

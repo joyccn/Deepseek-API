@@ -29,6 +29,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/models", s.handleListModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
+	mux.HandleFunc("POST /v1/messages", s.handleAnthropicMessages)
+	mux.HandleFunc("POST /v1/images/generations", s.handleImageGenerations)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
