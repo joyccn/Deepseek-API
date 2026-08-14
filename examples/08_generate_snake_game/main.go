@@ -31,7 +31,11 @@ type ChatCompletionResponse struct {
 }
 
 func main() {
-	url := "http://localhost:8080/v1/chat/completions"
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8000"
+	}
+	url := "http://localhost:" + port + "/v1/chat/completions"
 
 	prompt := `Write a complete, high-quality Python Snake Game class with full unittest suite.
 Requirements:

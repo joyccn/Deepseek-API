@@ -7,10 +7,15 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 )
 
 func main() {
-	url := "http://localhost:8080/v1/messages"
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8000"
+	}
+	url := "http://localhost:" + port + "/v1/messages"
 
 	reqBody := map[string]any{
 		"model":      "claude-3-5-sonnet-20241022",

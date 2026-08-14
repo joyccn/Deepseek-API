@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -63,7 +64,11 @@ func sendChatMessages(url, model string, messages []ChatMessage, convID string) 
 }
 
 func main() {
-	url := "http://localhost:8080/v1/chat/completions"
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8000"
+	}
+	url := "http://localhost:" + port + "/v1/chat/completions"
 
 	fmt.Println("=== TEST 1: STARTING MULTI-TURN CONTINUOUS CONVERSATION ===")
 	secretKeyword := "ANTIGRAVITY-GOLANG-2026"
