@@ -3,63 +3,75 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go)](https://go.dev)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
+[![OpenAI & Anthropic Compatible](https://img.shields.io/badge/API-OpenAI%20%7C%20Anthropic-orange.svg)]()
 
 High-performance, 100% native **Golang** OpenAI & Anthropic compatible API relay server (`http://localhost:8000`) powered by personal DeepSeek Web accounts.
 
-Designed specifically to serve as a fast, reliable backend provider for **Agentic Coding CLIs** (e.g., Claude Code, OpenCode, OpenAI Codex CLI, Cursor, Aider, Continue, etc.) with support for **Anthropic Messages API**, **OpenAI Chat Completions**, **DeepThink R1 Reasoning**, **Web Search**, and **Tool Calling**.
+Designed specifically to serve as a fast, reliable drop-in backend provider for **Agentic Coding CLIs** (e.g., Claude Code, OpenCode, OpenAI Codex CLI, Cursor, Aider, Continue, etc.) with native support for **Anthropic Messages API**, **OpenAI Chat Completions**, **DeepThink R1 Reasoning**, **Live Web Search & Citations**, and **Multi-Turn Agent Trajectory Tool Calling**.
 
 ---
 
-## Features
+## ⚡ Features
 
 - **Pure Go WASM PoW Solver (`wazero`)** — Zero CGo dependencies. Solves DeepSeek `sha3_wasm_bg.wasm` challenges natively in ~0.16s.
 - **Dual API Compatibility (Anthropic + OpenAI)** — Dual endpoint support for both Anthropic Messages API (`POST /v1/messages`) and OpenAI Chat (`POST /v1/chat/completions`).
-- **Claude Code Integration** — Native support for Claude Code CLI and Anthropic SDKs via `/v1/messages` with `thinking` blocks (`budget_tokens`) and `tool_use`.
+- **Claude Code Integration** — Native support for Claude Code CLI and Anthropic SDKs via `/v1/messages` with `thinking` blocks (`budget_tokens`), `tool_use` JSON objects, and `tool_result` history.
 - **OpenAI Codex CLI Compatibility** — Native discovery schema for `GET /v1/models` including reasoning levels, slug, and context windows.
-- **Clean Reasoning Output Parser** — Separates `THINK` and `RESPONSE` stream fragments cleanly. `reasoning_content` & `thinking` are delivered in standard delta formats without corrupting main answer text.
-- **Agentic Tool Calling Bridge** — Converts OpenAI `tools` and Anthropic `tools` definitions into prompt instructions and parses XML/JSON `<tool_call>` outputs back into standard `tool_calls` / `tool_use`.
-- **Stateful Multi-turn Context & Reset Triggers** — Thread-safe session cache maps client message arrays to DeepSeek `chat_session_id` continuously. Automatically resets session on `/clear`, `/reset`, `/new`, or `/compact`.
+- **Auto Token Exchange & Self-Healing** — Accepts raw `userToken` from LocalStorage, automatically exchanges it for short-lived `accessToken` via `/api/v0/users/current`, and auto-refreshes on expiration.
+- **Clean Reasoning Output Parser** — Separates `THINK` and `RESPONSE` stream fragments dynamically. `reasoning_content` & `thinking` are delivered in standard delta formats without corrupting main answer text.
+- **Live Web Search & Structured Citations** — Supports `deepseek-search` and `deepseek-reasoner-search` with automatic conversion of `[citation:X]` tags and structured markdown footnote citations.
+- **Multi-Format Tool Calling & Trajectory Replay** — Parses `<tool>...</tool>`, `<tool:name>`, `<tool_call>`, and `<parameter>` shapes, while reconstructing multi-turn assistant tool calls and `tool_result` outputs with anchoring instructions to prevent agent amnesia and duplicate calls.
+- **Ephemeral Session Auto-Cleanup** — Temporary one-off sessions are automatically deleted from DeepSeek's backend via `/api/v0/chat_session/delete`, keeping your web dashboard clean.
+- **CORS & Web Frontend Ready** — Built-in CORS middleware and preflight handlers for browser web interfaces (Open WebUI, Chatbox, etc.).
 
 ---
 
-## Compatibility
+## 🌐 Supported Models & Endpoints
 
-Deepseek-API is a full drop-in replacement for OpenAI and Anthropic endpoints:
-
+### Endpoints
 | Endpoint | Standard API | Supported Features |
 | :--- | :--- | :--- |
-| `POST /v1/messages` | **Anthropic Messages API** | Claude Code CLI, Anthropic SDKs, `thinking` blocks, `tool_use` |
-| `POST /v1/chat/completions` | **OpenAI Chat API** | OpenCode, Cursor, Aider, `reasoning_content`, `tool_calls`, SSE Streaming |
-| `GET /v1/models` | **OpenAI / Codex Models API** | Model Discovery (`deepseek-chat`, `deepseek-expert`) |
-| `GET /healthz` | **Health Endpoint** | Server status check (`{"status":"ok"}`) |
+| `POST /v1/messages` | **Anthropic Messages API** | Claude Code CLI, Anthropic SDKs, `thinking` blocks, `tool_use`, `tool_result` |
+| `POST /v1/chat/completions` | **OpenAI Chat API** | OpenCode, Cursor, Aider, `reasoning_content`, `tool_calls`, Web Search, SSE Streaming |
+| `GET /v1/models` | **OpenAI / Codex Models API** | Model Discovery (`slug`, `context_window`, `supported_reasoning_levels`) |
+| `GET /healthz` | **Health Endpoint** | Server status check (`{"status":"ok"}`) with CORS headers |
+
+### Model Catalog
+| Model Name / Slug | Mode | Capabilities | Description |
+| :--- | :--- | :--- | :--- |
+| `deepseek-chat` / `deepseek-v3` | Fast Chat | Text | Standard high-speed conversational model |
+| `deepseek-reasoner` / `deepseek-r1` | Reasoning | Text + DeepThink | Reasoning model streaming `reasoning_content` deltas |
+| `deepseek-expert` | Expert | Text + DeepThink | High-precision model for complex architecture |
+| `deepseek-search` | Web Search | Text + Live Web Search | Model with real-time internet search and citation links |
+| `deepseek-reasoner-search` | Hybrid | DeepThink + Live Search | DeepThink R1 combined with live internet search |
 
 ---
 
-## Architecture
+## 🛠️ Architecture
 
 - **`cmd/server`** — High-performance HTTP server entry point (`net/http` & `log/slog`).
 - **`pkg/pow`** — WebAssembly PoW solver executing `sha3_wasm_bg.wasm` via `wazero`.
-- **`pkg/auth`** — Session storage and bearer token validator (`session/session.json`).
-- **`pkg/client`** — Direct HTTP client driver & real-time SSE stream fragment parser.
-- **`pkg/agentic`** — Thread-safe session cache, prompt injector, thinking extractor, and tool call parser.
+- **`pkg/auth`** — Session storage, token extraction, and access token resolution (`session/session.json`).
+- **`pkg/client`** — Direct HTTP client driver, `/users/current` auto-exchange, `/chat_session/delete` cleaner, and real-time SSE stream parser.
+- **`pkg/agentic`** — Multi-format tool parser, trajectory prompt replay builder, thinking extractor, and session cache.
 - **`pkg/server`** — OpenAI & Anthropic REST API handlers (`/v1/messages`, `/v1/chat/completions`, `/v1/models`, `/healthz`).
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ### 1. Requirements
 
 - **Go 1.22+**
 - A **DeepSeek Account** (free account from [chat.deepseek.com](https://chat.deepseek.com))
 
-### 2. Capturing Session Token & Cookies
+### 2. Setting Up Session Token
 
-Create `session/session.json` containing your signed-in DeepSeek browser session:
+Create `session/session.json` (or set `DEEPSEEK_TOKEN` in `.env`):
 
 ```json
 {
-  "token": "YOUR_DEEPSEEK_BEARER_TOKEN",
+  "token": "YOUR_DEEPSEEK_USER_TOKEN_OR_BEARER",
   "cookies": {
     "ds_session_id": "YOUR_SESSION_ID"
   },
@@ -68,11 +80,11 @@ Create `session/session.json` containing your signed-in DeepSeek browser session
 }
 ```
 
-> **How to get your session token manually:**
+> **💡 Easy Token Capture:**
 > 1. Open [chat.deepseek.com](https://chat.deepseek.com) in your browser and log in.
-> 2. Open Developer Tools (F12) -> Console.
-> 3. Type `JSON.parse(localStorage.getItem('userToken')).value` to get your bearer `token`.
-> 4. In Application -> Cookies, copy `ds_session_id`.
+> 2. Open Developer Tools (F12) → **Application** → **Local Storage** → `chat.deepseek.com`.
+> 3. Copy the value of `userToken` (raw string or JSON `{"value":"..."}`).
+> 4. Paste it into `"token"` in `session/session.json`. The server will handle authentication and auto-refresh automatically!
 
 ### 3. Building & Running
 
@@ -90,77 +102,95 @@ CGO_ENABLED=0 go build -o deepseek-api-server ./cmd/server
 
 ---
 
-## Examples
+## 🔌 CLI & Tool Integrations
 
-Run any of the included examples in the [`examples/`](examples) directory:
-
+### Claude Code CLI
 ```bash
-# Direct chat completion
-go run ./examples/01_direct_chat
+export ANTHROPIC_BASE_URL="http://localhost:8000"
+export ANTHROPIC_API_KEY="dummy-token"
+export ANTHROPIC_MODEL="claude-3-7-sonnet-20250219"
 
-# Direct SSE streaming
-go run ./examples/02_direct_stream
-
-# DeepThink R1 Reasoning
-go run ./examples/03_deepthink_reasoning
-
-# Web Search integration
-go run ./examples/04_web_search
-
-# Tool Calling parser
-go run ./examples/05_tool_calling
-
-# Claude Code / Anthropic Messages API
-go run ./examples/06_claude_code_anthropic
-
-# Multi-turn Long Conversation & Reset Triggers
-go run ./examples/07_long_conversation_test
-
-# End-to-End Snake Game Generation & Test Creation
-go run ./examples/08_generate_snake_game
-
-# Refinement & Code Fixing via API
-go run ./examples/09_refine_snake_game
+claude
 ```
 
-### HTTP Curl Examples
+### Cursor / Aider / OpenCode
+- **OpenAI Base URL**: `http://localhost:8000/v1`
+- **API Key**: `dummy-token`
+- **Model**: `deepseek-chat`, `deepseek-reasoner`, or `deepseek-search`
 
-#### Anthropic Messages API (Claude Code CLI / Anthropic SDK)
+---
+
+## 📖 Usage Examples
+
+### 1. Anthropic Messages API with Thinking (Claude Code)
 ```bash
 curl http://localhost:8000/v1/messages \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-3-7-sonnet-20250219",
     "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "Hello Claude Code!"}],
+    "messages": [{"role": "user", "content": "Explain quantum computing in 2 sentences."}],
     "thinking": {"type": "enabled", "budget_tokens": 1024}
   }'
 ```
 
-#### Standard OpenAI Chat Completion
+### 2. Live Web Search with Citations
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-search",
+    "messages": [{"role": "user", "content": "What is the latest release version of Go language in 2026?"}]
+  }'
+```
+
+### 3. DeepThink R1 Real-Time Streaming
+```bash
+curl -N http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-reasoner",
+    "stream": true,
+    "messages": [{"role": "user", "content": "Solve: 17 * 29 + 143"}]
+  }'
+```
+
+### 4. Agentic Tool Calling
 ```bash
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "deepseek-chat",
-    "messages": [{"role": "user", "content": "Hello Golang server!"}]
+    "messages": [{"role": "user", "content": "What is the weather in Tokyo?"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get weather for a city",
+        "parameters": {
+          "type": "object",
+          "properties": {"city": {"type": "string"}},
+          "required": ["city"]
+        }
+      }
+    }]
   }'
 ```
 
 ---
 
-## Development
+## 🧪 Testing
 
-Run unit tests across all packages:
+Run comprehensive unit tests across all packages:
 
 ```bash
-go test ./... -v
+go test ./... -v -count=1
 ```
 
 ---
 
-## License
+## 📄 License
 
-[MIT](https://github.com/joyccn/Deepseek-API/blob/main/LICENSE) — Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software.
+[MIT](https://github.com/joyccn/Deepseek-API/blob/main/LICENSE) — Open source under the MIT License.
 
 © 2026-Present Joy.
