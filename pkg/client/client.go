@@ -164,18 +164,85 @@ func (c *Client) Stream(ctx context.Context, compReq CompletionRequest, powHeade
 	return ch, nil
 }
 
+func (c *Client) AcquireAccessToken(ctx context.Context) (string, error) {
+	token := c.session.Token
+	if token == "" {
+		return "", fmt.Errorf("no token available in session")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", BaseURL+"/api/v0/users/current", nil)
+	if err != nil {
+		return "", err
+	}
+	c.setHeaders(req)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("users/current request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("users/current HTTP %d", resp.StatusCode)
+	}
+
+	var res struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			BizData struct {
+				Token string `json:"token"`
+			} `json:"biz_data"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return "", fmt.Errorf("decode users/current response failed: %w", err)
+	}
+	if res.Code != 0 {
+		return "", fmt.Errorf("deepseek rejected token: %s (code %d)", res.Msg, res.Code)
+	}
+
+	accessToken := res.Data.BizData.Token
+	if accessToken == "" {
+		return "", fmt.Errorf("no access token returned in biz_data")
+	}
+
+	c.session.AccessToken = accessToken
+	c.session.AccessTokenExpiresAt = time.Now().Unix() + 3600
+	return accessToken, nil
+}
+
+func (c *Client) DeleteChatSession(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]string{"chat_session_id": sessionID})
+	req, err := http.NewRequestWithContext(ctx, "POST", BaseURL+"/api/v0/chat_session/delete", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+	c.setHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
 func (c *Client) setHeaders(req *http.Request) {
-	req.Header.Set("Authorization", "Bearer "+c.session.Token)
+	effectiveToken := c.session.GetEffectiveToken()
+	req.Header.Set("Authorization", "Bearer "+effectiveToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", c.session.UserAgent)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Origin", BaseURL)
 	req.Header.Set("Referer", BaseURL+"/")
-	req.Header.Set("x-app-version", "2.0.0")
-	req.Header.Set("x-client-version", "2.0.0")
-	req.Header.Set("x-client-platform", "web")
-	req.Header.Set("x-client-locale", "en_US")
-	req.Header.Set("x-client-bundle-id", "com.deepseek.chat")
+	req.Header.Set("X-Client-Version", "2.0.0")
+	req.Header.Set("X-Client-Platform", "web")
+	req.Header.Set("X-Client-Locale", "en_US")
+	req.Header.Set("X-Client-Bundle-Id", "com.deepseek.chat")
 
 	for k, v := range c.session.Cookies {
 		req.AddCookie(&http.Cookie{Name: k, Value: v})

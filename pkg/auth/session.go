@@ -5,14 +5,38 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 type Session struct {
-	Token      string            `json:"token"`
-	Cookies    map[string]string `json:"cookies"`
-	UserAgent  string            `json:"user_agent"`
-	CapturedAt float64           `json:"captured_at"`
+	Token                string            `json:"token"`
+	UserToken            string            `json:"user_token,omitempty"`
+	AccessToken          string            `json:"access_token,omitempty"`
+	AccessTokenExpiresAt int64             `json:"access_token_expires_at,omitempty"`
+	Cookies              map[string]string `json:"cookies"`
+	UserAgent            string            `json:"user_agent"`
+	CapturedAt           float64           `json:"captured_at"`
+}
+
+// ExtractUserToken unmarshals JSON wrapped token {"value":"..."} or returns raw string
+func ExtractUserToken(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "{") && strings.HasSuffix(raw, "}") {
+		var parsed struct {
+			Value string `json:"value"`
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			if parsed.Value != "" {
+				return parsed.Value
+			}
+			if parsed.Token != "" {
+				return parsed.Token
+			}
+		}
+	}
+	return raw
 }
 
 func LoadSession(path string) (*Session, error) {
@@ -24,6 +48,7 @@ func LoadSession(path string) (*Session, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("unable to parse session json: %w", err)
 	}
+	s.Token = ExtractUserToken(s.Token)
 	return &s, nil
 }
 
@@ -38,12 +63,15 @@ func (s *Session) Save(path string) error {
 	return os.WriteFile(path, data, 0600)
 }
 
-func (s *Session) IsValid() bool {
-	if s.Token == "" {
-		return false
+func (s *Session) GetEffectiveToken() string {
+	now := time.Now().Unix()
+	if s.AccessToken != "" && s.AccessTokenExpiresAt > now+30 {
+		return s.AccessToken
 	}
-	// Session valid for 6 hours (21600 seconds)
-	maxAge := 6.0 * 3600.0
-	age := float64(time.Now().Unix()) - s.CapturedAt
-	return age >= 0 && age < maxAge
+	return s.Token
 }
+
+func (s *Session) IsValid() bool {
+	return s.GetEffectiveToken() != ""
+}
+
