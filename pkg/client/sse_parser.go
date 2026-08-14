@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -16,7 +17,10 @@ func ParseSSE(r io.Reader) <-chan StreamEvent {
 		defer close(ch)
 		scanner := bufio.NewScanner(r)
 		scanner.Buffer(make([]byte, 64*1024), maxSSELineSize)
+
+		fragmentTypes := make(map[int]StreamEventType)
 		activeFragmentType := EventContent
+		latestFragmentIndex := 0
 
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
@@ -35,22 +39,20 @@ func ParseSSE(r io.Reader) <-chan StreamEvent {
 
 			v := obj["v"]
 
-			// Snapshot frame: {"v": {"response": {"message_id": 2, "fragments": [...]}}}
+			// 1. Snapshot frame: {"v": {"response": {"message_id": 2, "fragments": [...]}}}
 			if vMap, ok := v.(map[string]any); ok {
 				if resp, ok := vMap["response"].(map[string]any); ok {
 					if frags, ok := resp["fragments"].([]any); ok {
-						for _, f := range frags {
+						for idx, f := range frags {
 							if fMap, ok := f.(map[string]any); ok {
 								fType, _ := fMap["type"].(string)
 								content, _ := fMap["content"].(string)
-								fTypeUpper := strings.ToUpper(fType)
-								if strings.Contains(fTypeUpper, "THINK") || strings.Contains(fTypeUpper, "REASON") {
-									activeFragmentType = EventThinking
-								} else {
-									activeFragmentType = EventContent
-								}
+								evType := resolveFragmentType(fType)
+								fragmentTypes[idx] = evType
+								activeFragmentType = evType
+								latestFragmentIndex = idx
 								if content != "" {
-									ch <- StreamEvent{Type: activeFragmentType, Text: content}
+									ch <- StreamEvent{Type: evType, Text: content}
 								}
 							}
 						}
@@ -59,41 +61,57 @@ func ParseSSE(r io.Reader) <-chan StreamEvent {
 				continue
 			}
 
-			// Append frame with new fragment list: {"p": "response/fragments", "o": "APPEND", "v": [...]}
+			// 2. Append frame: {"p": "response/fragments", "o": "APPEND", "v": [...]}
 			if obj["p"] == "response/fragments" && obj["o"] == "APPEND" {
-				if vList, ok := v.([]any); ok && len(vList) > 0 {
-					if fMap, ok := vList[0].(map[string]any); ok {
-						fType, _ := fMap["type"].(string)
-						content, _ := fMap["content"].(string)
-						fTypeUpper := strings.ToUpper(fType)
-						if strings.Contains(fTypeUpper, "THINK") || strings.Contains(fTypeUpper, "REASON") {
-							activeFragmentType = EventThinking
-						} else {
-							activeFragmentType = EventContent
-						}
-						if content != "" {
-							ch <- StreamEvent{Type: activeFragmentType, Text: content}
+				if vList, ok := v.([]any); ok {
+					for _, f := range vList {
+						if fMap, ok := f.(map[string]any); ok {
+							fType, _ := fMap["type"].(string)
+							content, _ := fMap["content"].(string)
+							evType := resolveFragmentType(fType)
+							latestFragmentIndex = len(fragmentTypes)
+							fragmentTypes[latestFragmentIndex] = evType
+							activeFragmentType = evType
+							if content != "" {
+								ch <- StreamEvent{Type: evType, Text: content}
+							}
 						}
 					}
 				}
 				continue
 			}
 
-			// Text content append: {"p": "response/fragments/0/content", "v": "..."}
+			// 3. Content append/patch: {"p": "response/fragments/<idx>/content", "v": "..."}
+			pStr, _ := obj["p"].(string)
 			if strVal, ok := v.(string); ok && strVal != "" {
-				pStr, _ := obj["p"].(string)
-				fragType := activeFragmentType
-				if strings.Contains(pStr, "fragments/0") {
-					fragType = EventThinking
-				} else if strings.Contains(pStr, "fragments/1") {
-					fragType = EventContent
-				}
-				if pStr == "" || strings.Contains(pStr, "content") || strings.Contains(pStr, "fragments") {
-					ch <- StreamEvent{Type: fragType, Text: strVal}
+				if strings.HasPrefix(pStr, "response/fragments/") && strings.HasSuffix(pStr, "/content") {
+					idxStr := strings.TrimPrefix(pStr, "response/fragments/")
+					idxStr = strings.TrimSuffix(idxStr, "/content")
+
+					evType := activeFragmentType
+					if idxStr == "-1" {
+						evType = activeFragmentType
+					} else if idx, err := strconv.Atoi(idxStr); err == nil {
+						if t, found := fragmentTypes[idx]; found {
+							evType = t
+						}
+					}
+
+					ch <- StreamEvent{Type: evType, Text: strVal}
+				} else if pStr == "response/content" || pStr == "" {
+					ch <- StreamEvent{Type: activeFragmentType, Text: strVal}
 				}
 			}
 		}
 	}()
 
 	return ch
+}
+
+func resolveFragmentType(fType string) StreamEventType {
+	fTypeUpper := strings.ToUpper(fType)
+	if strings.Contains(fTypeUpper, "THINK") || strings.Contains(fTypeUpper, "REASON") {
+		return EventThinking
+	}
+	return EventContent
 }

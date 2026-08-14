@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"deepseek-api/pkg/auth"
@@ -94,12 +95,12 @@ func (c *Client) FetchPoWHeader(ctx context.Context) (string, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", err
 	}
-	return c.solver.MakeHeader(result.Data.BizData.Challenge)
+	return c.solver.MakeHeader(ctx, result.Data.BizData.Challenge)
 }
 
 func (c *Client) Stream(ctx context.Context, compReq CompletionRequest, powHeader string) (<-chan StreamEvent, error) {
 	modelType := compReq.ModelType
-	if modelType == "" || modelType == "default" {
+	if modelType == "" || strings.EqualFold(modelType, "default") || strings.EqualFold(modelType, "chat") || strings.EqualFold(modelType, "deepseek-chat") {
 		modelType = "DEFAULT"
 	}
 
@@ -143,8 +144,20 @@ func (c *Client) Stream(ctx context.Context, compReq CompletionRequest, powHeade
 		defer resp.Body.Close()
 		defer close(ch)
 		parsed := ParseSSE(resp.Body)
-		for ev := range parsed {
-			ch <- ev
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-parsed:
+				if !ok {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case ch <- ev:
+				}
+			}
 		}
 	}()
 
