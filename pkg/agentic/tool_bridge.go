@@ -18,7 +18,8 @@ type ToolCall struct {
 	Function FunctionCall `json:"function"`
 }
 
-var toolCallRegex = regexp.MustCompile(`<tool_call>(.*?)</tool_call>`)
+// Multiline matching for tool call XML tags
+var toolCallRegex = regexp.MustCompile(`(?s)<tool_call>(.*?)</tool_call>`)
 
 func ParseToolCalls(content string) ([]ToolCall, string) {
 	matches := toolCallRegex.FindAllStringSubmatch(content, -1)
@@ -31,18 +32,44 @@ func ParseToolCalls(content string) ([]ToolCall, string) {
 		if len(m) < 2 {
 			continue
 		}
+		rawJSON := strings.TrimSpace(m[1])
 		var parsed struct {
-			Name      string         `json:"name"`
-			Arguments map[string]any `json:"arguments"`
+			Name       string `json:"name"`
+			Arguments  any    `json:"arguments"`
+			Parameters any    `json:"parameters"`
+			Input      any    `json:"input"`
 		}
-		if err := json.Unmarshal([]byte(m[1]), &parsed); err == nil {
-			argBytes, _ := json.Marshal(parsed.Arguments)
+		if err := json.Unmarshal([]byte(rawJSON), &parsed); err == nil && parsed.Name != "" {
+			args := parsed.Arguments
+			if args == nil {
+				if parsed.Input != nil {
+					args = parsed.Input
+				} else if parsed.Parameters != nil {
+					args = parsed.Parameters
+				}
+			}
+
+			var argStr string
+			switch a := args.(type) {
+			case string:
+				argStr = a
+			case nil:
+				argStr = "{}"
+			default:
+				argBytes, err := json.Marshal(a)
+				if err == nil {
+					argStr = string(argBytes)
+				} else {
+					argStr = "{}"
+				}
+			}
+
 			calls = append(calls, ToolCall{
 				ID:   fmt.Sprintf("call_%d", i+1),
 				Type: "function",
 				Function: FunctionCall{
 					Name:      parsed.Name,
-					Arguments: string(argBytes),
+					Arguments: argStr,
 				},
 			})
 		}
@@ -72,3 +99,4 @@ func InjectToolsIntoPrompt(prompt string, tools []any) string {
 
 	return prompt + instructions
 }
+

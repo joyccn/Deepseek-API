@@ -22,6 +22,33 @@ func TestToolCallParser(t *testing.T) {
 	}
 }
 
+func TestMultilineToolCallParser(t *testing.T) {
+	rawLLMOutput := `Here is the command execution:
+<tool_call>
+{
+  "name": "bash",
+  "input": {
+    "command": "ls -la"
+  }
+}
+</tool_call>
+Done.`
+
+	toolCalls, cleanText := agentic.ParseToolCalls(rawLLMOutput)
+	if len(toolCalls) != 1 {
+		t.Fatalf("Expected 1 tool call from multiline, got %d", len(toolCalls))
+	}
+	if toolCalls[0].Function.Name != "bash" {
+		t.Errorf("Expected function bash, got %s", toolCalls[0].Function.Name)
+	}
+	if !strings.Contains(toolCalls[0].Function.Arguments, "ls -la") {
+		t.Errorf("Expected argument to contain 'ls -la', got %s", toolCalls[0].Function.Arguments)
+	}
+	if strings.Contains(cleanText, "<tool_call>") {
+		t.Errorf("Clean text still contains tool_call tags: %s", cleanText)
+	}
+}
+
 func TestToolPromptInjection(t *testing.T) {
 	tools := []any{
 		map[string]any{
