@@ -40,7 +40,7 @@ func (s *Solver) Close(ctx context.Context) error {
 	return s.runtime.Close(ctx)
 }
 
-func (s *Solver) MakeHeader(challenge map[string]any) (string, error) {
+func (s *Solver) MakeHeader(ctx context.Context, challenge map[string]any) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -60,9 +60,27 @@ func (s *Solver) MakeHeader(challenge map[string]any) (string, error) {
 	}
 	prefix := fmt.Sprintf("%s_%s_", salt, expireAtStr)
 	chStr, _ := challenge["challenge"].(string)
-	diff, _ := challenge["difficulty"].(float64)
 
-	ctx := context.Background()
+	var diff float64
+	switch v := challenge["difficulty"].(type) {
+	case float64:
+		diff = v
+	case float32:
+		diff = float64(v)
+	case int64:
+		diff = float64(v)
+	case int:
+		diff = float64(v)
+	case json.Number:
+		diff, _ = v.Float64()
+	case string:
+		fmt.Sscanf(v, "%f", &diff)
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	ans, err := s.solve(ctx, chStr, prefix, diff)
 	if err != nil {
 		return "", err
