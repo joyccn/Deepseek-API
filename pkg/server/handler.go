@@ -69,6 +69,8 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			{"id": "deepseek-chat", "object": "model", "created": now, "owned_by": "deepseek"},
 			{"id": "deepseek-reasoner", "object": "model", "created": now, "owned_by": "deepseek"},
 			{"id": "deepseek-expert", "object": "model", "created": now, "owned_by": "deepseek"},
+			{"id": "deepseek-search", "object": "model", "created": now, "owned_by": "deepseek"},
+			{"id": "deepseek-reasoner-search", "object": "model", "created": now, "owned_by": "deepseek"},
 		},
 		"models": []map[string]any{
 			{
@@ -98,6 +100,24 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 				"supported_in_api":           true,
 				"context_window":             128000,
 			},
+			{
+				"slug":                       "deepseek-search",
+				"display_name":               "DeepSeek Web Search (V3)",
+				"description":                "DeepSeek model with live web search and citation references",
+				"default_reasoning_level":    "medium",
+				"supported_reasoning_levels": []map[string]string{{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}},
+				"supported_in_api":           true,
+				"context_window":             128000,
+			},
+			{
+				"slug":                       "deepseek-reasoner-search",
+				"display_name":               "DeepSeek Reasoner + Search (R1)",
+				"description":                "DeepThink R1 reasoning combined with live web search",
+				"default_reasoning_level":    "high",
+				"supported_reasoning_levels": []map[string]string{{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}},
+				"supported_in_api":           true,
+				"context_window":             128000,
+			},
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -118,22 +138,18 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Build prompt from messages
-	var promptBuilder strings.Builder
+	// Convert messages to agentic format and build trajectory prompt
+	var agenticMsgs []agentic.Message
 	for _, m := range req.Messages {
-		if m.Role != "" {
-			promptBuilder.WriteString(m.Role)
-			promptBuilder.WriteString(": ")
-		}
-		promptBuilder.WriteString(extractMessageContent(m.Content))
-		promptBuilder.WriteString("\n")
+		agenticMsgs = append(agenticMsgs, agentic.Message{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
+			Name:       m.Name,
+		})
 	}
-	prompt := promptBuilder.String()
-
-	// Inject tool instructions if tools array is provided
-	if len(req.Tools) > 0 {
-		prompt = agentic.InjectToolsIntoPrompt(prompt, req.Tools)
-	}
+	prompt := agentic.BuildTrajectoryPrompt(agenticMsgs, req.Tools)
 
 	// Resolve session ID
 	sessionID := req.ConversationID
@@ -168,12 +184,19 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	modelLower := strings.ToLower(req.Model)
 	thinkingEnabled := req.Thinking ||
+		req.ThinkingEnabled ||
 		req.ReasoningEffort != "" ||
 		strings.Contains(modelLower, "reasoner") ||
 		strings.Contains(modelLower, "r1") ||
 		strings.Contains(modelLower, "expert") ||
+		strings.Contains(modelLower, "think") ||
 		strings.Contains(modelLower, "o1") ||
 		strings.Contains(modelLower, "o3")
+
+	searchEnabled := req.Search ||
+		req.SearchEnabled ||
+		req.WebSearch ||
+		strings.Contains(modelLower, "search")
 
 	modelType := "default"
 	if strings.Contains(modelLower, "expert") || strings.Contains(modelLower, "reasoner") || strings.Contains(modelLower, "r1") {
@@ -185,18 +208,21 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		ChatSessionID:   sessionID,
 		ModelType:       modelType,
 		ThinkingEnabled: thinkingEnabled,
-		SearchEnabled:   req.Search,
+		SearchEnabled:   searchEnabled,
 	}
 
 	if req.Stream {
-		s.handleStreamResponse(w, r, compReq, powHeader, req.Model, sessionID)
+		s.handleStreamResponse(w, r, compReq, powHeader, req.Model, sessionID, req.ConversationID == "")
 		return
 	}
 
-	s.handleNonStreamResponse(w, r.Context(), compReq, powHeader, req.Model, sessionID)
+	s.handleNonStreamResponse(w, r.Context(), compReq, powHeader, req.Model, sessionID, req.ConversationID == "")
 }
 
-func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, compReq client.CompletionRequest, powHeader, model, sessionID string) {
+func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, compReq client.CompletionRequest, powHeader, model, sessionID string, isEphemeral bool) {
+	if isEphemeral {
+		defer s.client.DeleteChatSession(context.Background(), sessionID)
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -290,7 +316,10 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 	flusher.Flush()
 }
 
-func (s *Server) handleNonStreamResponse(w http.ResponseWriter, ctx context.Context, compReq client.CompletionRequest, powHeader, model, sessionID string) {
+func (s *Server) handleNonStreamResponse(w http.ResponseWriter, ctx context.Context, compReq client.CompletionRequest, powHeader, model, sessionID string, isEphemeral bool) {
+	if isEphemeral {
+		defer s.client.DeleteChatSession(context.Background(), sessionID)
+	}
 	events, err := s.client.Stream(ctx, compReq, powHeader)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"message":"Request error: %v"}}`, err), http.StatusInternalServerError)

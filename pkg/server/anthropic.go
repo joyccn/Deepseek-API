@@ -77,43 +77,42 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 
-	// Extract prompt from system & messages
-	var promptBuilder strings.Builder
+	var agenticMsgs []agentic.Message
 
 	// Add system prompt if present
 	if req.System != nil {
 		switch sys := req.System.(type) {
 		case string:
-			promptBuilder.WriteString("System: ")
-			promptBuilder.WriteString(sys)
-			promptBuilder.WriteString("\n")
+			agenticMsgs = append(agenticMsgs, agentic.Message{Role: "system", Content: sys})
 		case []any:
-			promptBuilder.WriteString("System: ")
+			var sysTexts []string
 			for _, item := range sys {
 				if itemMap, ok := item.(map[string]any); ok {
 					if txt, ok := itemMap["text"].(string); ok {
-						promptBuilder.WriteString(txt)
-						promptBuilder.WriteString("\n")
+						sysTexts = append(sysTexts, txt)
 					}
 				}
+			}
+			if len(sysTexts) > 0 {
+				agenticMsgs = append(agenticMsgs, agentic.Message{Role: "system", Content: strings.Join(sysTexts, "\n")})
 			}
 		}
 	}
 
 	for _, m := range req.Messages {
-		promptBuilder.WriteString(m.Role)
-		promptBuilder.WriteString(": ")
 		switch c := m.Content.(type) {
 		case string:
-			promptBuilder.WriteString(c)
+			agenticMsgs = append(agenticMsgs, agentic.Message{Role: m.Role, Content: c})
 		case []any:
+			var textParts []string
+			var toolCalls []agentic.ToolCall
 			for _, item := range c {
 				if itemMap, ok := item.(map[string]any); ok {
 					bType, _ := itemMap["type"].(string)
 					switch bType {
 					case "text":
 						if txt, ok := itemMap["text"].(string); ok {
-							promptBuilder.WriteString(txt)
+							textParts = append(textParts, txt)
 						}
 					case "tool_result":
 						toolUseID, _ := itemMap["tool_use_id"].(string)
@@ -126,30 +125,42 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 							b, _ := json.Marshal(cv)
 							contentStr = string(b)
 						}
-						promptBuilder.WriteString(fmt.Sprintf("\n[Tool Result id=%s]: %s\n", toolUseID, contentStr))
+						agenticMsgs = append(agenticMsgs, agentic.Message{
+							Role:       "tool",
+							Content:    contentStr,
+							ToolCallID: toolUseID,
+							Name:       toolUseID,
+						})
 					case "tool_use":
 						toolID, _ := itemMap["id"].(string)
 						name, _ := itemMap["name"].(string)
 						inputBytes, _ := json.Marshal(itemMap["input"])
-						promptBuilder.WriteString(fmt.Sprintf("\n<tool_call>{\"name\": \"%s\", \"arguments\": %s}</tool_call>\n", name, string(inputBytes)))
-						_ = toolID
+						toolCalls = append(toolCalls, agentic.ToolCall{
+							ID:   toolID,
+							Type: "function",
+							Function: agentic.FunctionCall{
+								Name:      name,
+								Arguments: string(inputBytes),
+							},
+						})
 					case "thinking":
 						if thinkText, ok := itemMap["thinking"].(string); ok {
-							promptBuilder.WriteString(fmt.Sprintf("<think>%s</think>", thinkText))
+							textParts = append(textParts, fmt.Sprintf("<think>%s</think>", thinkText))
 						}
 					}
 				}
 			}
+			if len(textParts) > 0 || len(toolCalls) > 0 {
+				agenticMsgs = append(agenticMsgs, agentic.Message{
+					Role:      m.Role,
+					Content:   strings.Join(textParts, "\n"),
+					ToolCalls: toolCalls,
+				})
+			}
 		}
-		promptBuilder.WriteString("\n")
 	}
 
-	prompt := promptBuilder.String()
-
-	// Inject tool instructions if tools are present
-	if len(req.Tools) > 0 {
-		prompt = agentic.InjectToolsIntoPrompt(prompt, req.Tools)
-	}
+	prompt := agentic.BuildTrajectoryPrompt(agenticMsgs, req.Tools)
 
 	// Create Chat Session
 	sessionID, err := s.client.CreateChatSession(ctx)
@@ -184,14 +195,15 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.Stream {
-		s.handleAnthropicStreamResponse(w, r, compReq, powHeader, req.Model)
+		s.handleAnthropicStreamResponse(w, r, compReq, powHeader, req.Model, sessionID)
 		return
 	}
 
-	s.handleAnthropicNonStreamResponse(w, r.Context(), compReq, powHeader, req.Model)
+	s.handleAnthropicNonStreamResponse(w, r.Context(), compReq, powHeader, req.Model, sessionID)
 }
 
-func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Request, compReq client.CompletionRequest, powHeader, model string) {
+func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Request, compReq client.CompletionRequest, powHeader, model, sessionID string) {
+	defer s.client.DeleteChatSession(context.Background(), sessionID)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -361,7 +373,8 @@ func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Re
 	flusher.Flush()
 }
 
-func (s *Server) handleAnthropicNonStreamResponse(w http.ResponseWriter, ctx context.Context, compReq client.CompletionRequest, powHeader, model string) {
+func (s *Server) handleAnthropicNonStreamResponse(w http.ResponseWriter, ctx context.Context, compReq client.CompletionRequest, powHeader, model, sessionID string) {
+	defer s.client.DeleteChatSession(context.Background(), sessionID)
 	events, err := s.client.Stream(ctx, compReq, powHeader)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"type":"api_error","message":"Request error: %v"}}`, err), http.StatusInternalServerError)

@@ -3,8 +3,11 @@ package server
 import "deepseek-api/pkg/agentic"
 
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
+	Role       string             `json:"role"`
+	Content    any                `json:"content"`
+	ToolCalls  []agentic.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string             `json:"tool_call_id,omitempty"`
+	Name       string             `json:"name,omitempty"`
 }
 
 type ChatCompletionRequest struct {
@@ -13,8 +16,11 @@ type ChatCompletionRequest struct {
 	Stream          bool          `json:"stream"`
 	ConversationID  string        `json:"conversation_id,omitempty"`
 	Thinking        bool          `json:"thinking,omitempty"`
+	ThinkingEnabled bool          `json:"thinking_enabled,omitempty"`
 	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
 	Search          bool          `json:"search,omitempty"`
+	SearchEnabled   bool          `json:"search_enabled,omitempty"`
+	WebSearch       bool          `json:"web_search,omitempty"`
 	Tools           []any         `json:"tools,omitempty"`
 }
 
