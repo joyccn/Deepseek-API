@@ -87,6 +87,16 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 			promptBuilder.WriteString("System: ")
 			promptBuilder.WriteString(sys)
 			promptBuilder.WriteString("\n")
+		case []any:
+			promptBuilder.WriteString("System: ")
+			for _, item := range sys {
+				if itemMap, ok := item.(map[string]any); ok {
+					if txt, ok := itemMap["text"].(string); ok {
+						promptBuilder.WriteString(txt)
+						promptBuilder.WriteString("\n")
+					}
+				}
+			}
 		}
 	}
 
@@ -99,8 +109,34 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		case []any:
 			for _, item := range c {
 				if itemMap, ok := item.(map[string]any); ok {
-					if txt, ok := itemMap["text"].(string); ok {
-						promptBuilder.WriteString(txt)
+					bType, _ := itemMap["type"].(string)
+					switch bType {
+					case "text":
+						if txt, ok := itemMap["text"].(string); ok {
+							promptBuilder.WriteString(txt)
+						}
+					case "tool_result":
+						toolUseID, _ := itemMap["tool_use_id"].(string)
+						content := itemMap["content"]
+						var contentStr string
+						switch cv := content.(type) {
+						case string:
+							contentStr = cv
+						default:
+							b, _ := json.Marshal(cv)
+							contentStr = string(b)
+						}
+						promptBuilder.WriteString(fmt.Sprintf("\n[Tool Result id=%s]: %s\n", toolUseID, contentStr))
+					case "tool_use":
+						toolID, _ := itemMap["id"].(string)
+						name, _ := itemMap["name"].(string)
+						inputBytes, _ := json.Marshal(itemMap["input"])
+						promptBuilder.WriteString(fmt.Sprintf("\n<tool_call>{\"name\": \"%s\", \"arguments\": %s}</tool_call>\n", name, string(inputBytes)))
+						_ = toolID
+					case "thinking":
+						if thinkText, ok := itemMap["thinking"].(string); ok {
+							promptBuilder.WriteString(fmt.Sprintf("<think>%s</think>", thinkText))
+						}
 					}
 				}
 			}
@@ -131,7 +167,13 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	thinkingEnabled := req.Thinking != nil && req.Thinking.Type == "enabled"
+	modelLower := strings.ToLower(req.Model)
+	thinkingEnabled := (req.Thinking != nil && req.Thinking.Type == "enabled") ||
+		strings.Contains(modelLower, "reasoner") ||
+		strings.Contains(modelLower, "r1") ||
+		strings.Contains(modelLower, "expert") ||
+		strings.Contains(modelLower, "sonnet-3-7") ||
+		strings.Contains(modelLower, "claude-3-7")
 
 	compReq := client.CompletionRequest{
 		Prompt:          prompt,
@@ -146,7 +188,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.handleAnthropicNonStreamResponse(w, compReq, powHeader, req.Model)
+	s.handleAnthropicNonStreamResponse(w, r.Context(), compReq, powHeader, req.Model)
 }
 
 func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Request, compReq client.CompletionRequest, powHeader, model string) {
@@ -254,6 +296,7 @@ func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Re
 		})
 		fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", stopData)
 		flusher.Flush()
+		blockIndex++
 	}
 
 	fullText := fullTextBuilder.String()
@@ -262,6 +305,42 @@ func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Re
 	stopReason := "end_turn"
 	if len(toolCalls) > 0 {
 		stopReason = "tool_use"
+		for _, tc := range toolCalls {
+			var inputObj any
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &inputObj); err != nil {
+				inputObj = map[string]any{}
+			}
+
+			tbStart, _ := json.Marshal(map[string]any{
+				"type":  "content_block_start",
+				"index": blockIndex,
+				"content_block": map[string]any{
+					"type":  "tool_use",
+					"id":    tc.ID,
+					"name":  tc.Function.Name,
+					"input": inputObj,
+				},
+			})
+			fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", tbStart)
+
+			tbDelta, _ := json.Marshal(map[string]any{
+				"type":  "content_block_delta",
+				"index": blockIndex,
+				"delta": map[string]string{
+					"type":         "input_json_delta",
+					"partial_json": tc.Function.Arguments,
+				},
+			})
+			fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", tbDelta)
+
+			tbStop, _ := json.Marshal(map[string]any{
+				"type":  "content_block_stop",
+				"index": blockIndex,
+			})
+			fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", tbStop)
+			flusher.Flush()
+			blockIndex++
+		}
 	}
 
 	// 3. Send message_delta & message_stop
@@ -282,8 +361,8 @@ func (s *Server) handleAnthropicStreamResponse(w http.ResponseWriter, r *http.Re
 	flusher.Flush()
 }
 
-func (s *Server) handleAnthropicNonStreamResponse(w http.ResponseWriter, compReq client.CompletionRequest, powHeader, model string) {
-	events, err := s.client.Stream(context.Background(), compReq, powHeader)
+func (s *Server) handleAnthropicNonStreamResponse(w http.ResponseWriter, ctx context.Context, compReq client.CompletionRequest, powHeader, model string) {
+	events, err := s.client.Stream(ctx, compReq, powHeader)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"type":"api_error","message":"Request error: %v"}}`, err), http.StatusInternalServerError)
 		return
@@ -328,11 +407,15 @@ func (s *Server) handleAnthropicNonStreamResponse(w http.ResponseWriter, compReq
 	if len(toolCalls) > 0 {
 		stopReason = "tool_use"
 		for _, tc := range toolCalls {
+			var inputObj any
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &inputObj); err != nil {
+				inputObj = map[string]any{}
+			}
 			contents = append(contents, AnthropicMessageContent{
 				Type:  "tool_use",
 				ID:    tc.ID,
 				Name:  tc.Function.Name,
-				Input: tc.Function.Arguments,
+				Input: inputObj,
 			})
 		}
 	}

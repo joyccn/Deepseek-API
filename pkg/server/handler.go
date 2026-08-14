@@ -26,10 +26,33 @@ func NewServer(c *client.Client) *Server {
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	mux.HandleFunc("GET /v1/models", s.handleListModels)
-	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
-	mux.HandleFunc("POST /v1/messages", s.handleAnthropicMessages)
+	mux.HandleFunc("OPTIONS /", s.handleOptions)
+	mux.HandleFunc("GET /healthz", s.withCORS(s.handleHealthz))
+	mux.HandleFunc("GET /v1/models", s.withCORS(s.handleListModels))
+	mux.HandleFunc("POST /v1/chat/completions", s.withCORS(s.handleChatCompletions))
+	mux.HandleFunc("POST /v1/messages", s.withCORS(s.handleAnthropicMessages))
+}
+
+func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
+	s.setCORSHeaders(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) setCORSHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, anthropic-version, x-api-key, *")
+}
+
+func (s *Server) withCORS(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.setCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -44,14 +67,24 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		"object": "list",
 		"data": []map[string]any{
 			{"id": "deepseek-chat", "object": "model", "created": now, "owned_by": "deepseek"},
+			{"id": "deepseek-reasoner", "object": "model", "created": now, "owned_by": "deepseek"},
 			{"id": "deepseek-expert", "object": "model", "created": now, "owned_by": "deepseek"},
 		},
 		"models": []map[string]any{
 			{
 				"slug":                       "deepseek-chat",
-				"display_name":               "DeepSeek Instant (Chat)",
+				"display_name":               "DeepSeek Instant (Chat / V3)",
 				"description":                "Fast and responsive model for general coding and tasks",
 				"default_reasoning_level":    "medium",
+				"supported_reasoning_levels": []map[string]string{{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}},
+				"supported_in_api":           true,
+				"context_window":             128000,
+			},
+			{
+				"slug":                       "deepseek-reasoner",
+				"display_name":               "DeepSeek Reasoner (R1)",
+				"description":                "High-precision reasoning model with DeepThink R1 enabled",
+				"default_reasoning_level":    "high",
 				"supported_reasoning_levels": []map[string]string{{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}},
 				"supported_in_api":           true,
 				"context_window":             128000,
@@ -133,8 +166,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	modelLower := strings.ToLower(req.Model)
+	thinkingEnabled := req.Thinking ||
+		req.ReasoningEffort != "" ||
+		strings.Contains(modelLower, "reasoner") ||
+		strings.Contains(modelLower, "r1") ||
+		strings.Contains(modelLower, "expert") ||
+		strings.Contains(modelLower, "o1") ||
+		strings.Contains(modelLower, "o3")
+
 	modelType := "default"
-	if req.Model == "deepseek-expert" {
+	if strings.Contains(modelLower, "expert") || strings.Contains(modelLower, "reasoner") || strings.Contains(modelLower, "r1") {
 		modelType = "expert"
 	}
 
@@ -142,7 +184,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Prompt:          prompt,
 		ChatSessionID:   sessionID,
 		ModelType:       modelType,
-		ThinkingEnabled: req.Thinking,
+		ThinkingEnabled: thinkingEnabled,
 		SearchEnabled:   req.Search,
 	}
 
@@ -151,7 +193,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.handleNonStreamResponse(w, compReq, powHeader, req.Model, sessionID)
+	s.handleNonStreamResponse(w, r.Context(), compReq, powHeader, req.Model, sessionID)
 }
 
 func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, compReq client.CompletionRequest, powHeader, model, sessionID string) {
@@ -174,6 +216,7 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 	created := time.Now().Unix()
 	reqID := fmt.Sprintf("chatcmpl-%d", created)
 	var fullTextBuilder strings.Builder
+	firstChunk := true
 
 	for ev := range events {
 		var chunk ChatCompletionChunk
@@ -183,12 +226,19 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 		chunk.Model = model
 		chunk.ConversationID = sessionID
 
+		deltaRole := ""
+		if firstChunk {
+			deltaRole = "assistant"
+			firstChunk = false
+		}
+
 		switch ev.Type {
 		case client.EventThinking:
 			chunk.Choices = []ChatChunkChoice{
 				{
 					Index: 0,
 					Delta: ChatChoiceDelta{
+						Role:             deltaRole,
 						ReasoningContent: ev.Text,
 					},
 				},
@@ -199,6 +249,7 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 				{
 					Index: 0,
 					Delta: ChatChoiceDelta{
+						Role:    deltaRole,
 						Content: ev.Text,
 					},
 				},
@@ -239,8 +290,8 @@ func (s *Server) handleStreamResponse(w http.ResponseWriter, r *http.Request, co
 	flusher.Flush()
 }
 
-func (s *Server) handleNonStreamResponse(w http.ResponseWriter, compReq client.CompletionRequest, powHeader, model, sessionID string) {
-	events, err := s.client.Stream(context.Background(), compReq, powHeader)
+func (s *Server) handleNonStreamResponse(w http.ResponseWriter, ctx context.Context, compReq client.CompletionRequest, powHeader, model, sessionID string) {
+	events, err := s.client.Stream(ctx, compReq, powHeader)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"message":"Request error: %v"}}`, err), http.StatusInternalServerError)
 		return
@@ -269,7 +320,7 @@ func (s *Server) handleNonStreamResponse(w http.ResponseWriter, compReq client.C
 	}
 
 	toolCalls, finalContent := agentic.ParseToolCalls(cleanContent)
-	if finalContent == "" && finalThinking != "" {
+	if finalContent == "" && finalThinking != "" && !compReq.ThinkingEnabled {
 		finalContent = finalThinking
 		finalThinking = ""
 	}

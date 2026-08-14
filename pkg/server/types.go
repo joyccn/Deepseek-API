@@ -8,13 +8,14 @@ type ChatMessage struct {
 }
 
 type ChatCompletionRequest struct {
-	Model          string        `json:"model"`
-	Messages       []ChatMessage `json:"messages"`
-	Stream         bool          `json:"stream"`
-	ConversationID string        `json:"conversation_id,omitempty"`
-	Thinking       bool          `json:"thinking,omitempty"`
-	Search         bool          `json:"search,omitempty"`
-	Tools          []any         `json:"tools,omitempty"`
+	Model           string        `json:"model"`
+	Messages        []ChatMessage `json:"messages"`
+	Stream          bool          `json:"stream"`
+	ConversationID  string        `json:"conversation_id,omitempty"`
+	Thinking        bool          `json:"thinking,omitempty"`
+	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+	Search          bool          `json:"search,omitempty"`
+	Tools           []any         `json:"tools,omitempty"`
 }
 
 type ChatChoiceDelta struct {
